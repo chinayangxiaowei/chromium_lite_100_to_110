@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -37,11 +37,11 @@ MediaStreamDeviceObserver::MediaStreamDeviceObserver(LocalFrame* frame) {
   if (frame) {
     frame->GetInterfaceRegistry()->AddInterface(WTF::BindRepeating(
         &MediaStreamDeviceObserver::BindMediaStreamDeviceObserverReceiver,
-        WTF::Unretained(this)));
+        weak_factory_.GetWeakPtr()));
   }
 }
 
-MediaStreamDeviceObserver::~MediaStreamDeviceObserver() {}
+MediaStreamDeviceObserver::~MediaStreamDeviceObserver() = default;
 
 MediaStreamDevices MediaStreamDeviceObserver::GetNonScreenCaptureDevices() {
   MediaStreamDevices video_devices;
@@ -70,13 +70,21 @@ void MediaStreamDeviceObserver::OnDeviceStopped(
   }
 
   for (Stream& stream : it->value) {
-    if (IsAudioInputMediaType(device.type))
+    if (IsAudioInputMediaType(device.type)) {
       RemoveStreamDeviceFromArray(device, &stream.audio_devices);
-    else
+    } else {
       RemoveStreamDeviceFromArray(device, &stream.video_devices);
-
-    if (stream.on_device_stopped_cb)
+    }
+    if (stream.on_device_stopped_cb) {
+      // Running `stream.on_device_stopped_cb` can destroy `this`. Use a weak
+      // pointer to detect that condition, and stop processing if it happens.
+      base::WeakPtr<MediaStreamDeviceObserver> weak_this =
+          weak_factory_.GetWeakPtr();
       stream.on_device_stopped_cb.Run(device);
+      if (!weak_this) {
+        return;
+      }
+    }
   }
 
   // |it| could have already been invalidated in the function call above. So we
@@ -85,8 +93,9 @@ void MediaStreamDeviceObserver::OnDeviceStopped(
   // iterator from |label_stream_map_| (https://crbug.com/616884). Future work
   // needs to be done to resolve this re-entrancy issue.
   it = label_stream_map_.find(label);
-  if (it == label_stream_map_.end())
+  if (it == label_stream_map_.end()) {
     return;
+  }
 
   Vector<Stream>& streams = it->value;
   auto* stream_it = streams.begin();
@@ -99,7 +108,7 @@ void MediaStreamDeviceObserver::OnDeviceStopped(
     }
   }
 
-  if (it->value.IsEmpty())
+  if (it->value.empty())
     label_stream_map_.erase(it);
 }
 
@@ -122,8 +131,16 @@ void MediaStreamDeviceObserver::OnDeviceChanged(
   DCHECK_EQ(1u, it->value.size());
 
   Stream* stream = &it->value[0];
-  if (stream->on_device_changed_cb)
+  if (stream->on_device_changed_cb) {
+    // Running `stream->on_device_changed_cb` can destroy `this`. Use a weak
+    // pointer to detect that condition, and stop processing if it happens.
+    base::WeakPtr<MediaStreamDeviceObserver> weak_this =
+        weak_factory_.GetWeakPtr();
     stream->on_device_changed_cb.Run(old_device, new_device);
+    if (!weak_this) {
+      return;
+    }
+  }
 
   // Update device list only for device changing. Removing device will be
   // handled in its own callback.
@@ -278,9 +295,9 @@ void MediaStreamDeviceObserver::RemoveStreamDevice(
       streams_to_remove.push_back(entry.key);
     }
   }
-  DCHECK(device_found);
-  for (const String& label : streams_to_remove)
+  for (const String& label : streams_to_remove) {
     label_stream_map_.erase(label);
+  }
 }
 
 base::UnguessableToken MediaStreamDeviceObserver::GetAudioSessionId(
@@ -288,7 +305,7 @@ base::UnguessableToken MediaStreamDeviceObserver::GetAudioSessionId(
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
   auto it = label_stream_map_.find(label);
-  if (it == label_stream_map_.end() || it->value.IsEmpty() ||
+  if (it == label_stream_map_.end() || it->value.empty() ||
       it->value[0].audio_devices.empty())
     return base::UnguessableToken();
 
@@ -302,7 +319,7 @@ base::UnguessableToken MediaStreamDeviceObserver::GetVideoSessionId(
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
   auto it = label_stream_map_.find(label);
-  if (it == label_stream_map_.end() || it->value.IsEmpty() ||
+  if (it == label_stream_map_.end() || it->value.empty() ||
       it->value[0].video_devices.empty())
     return base::UnguessableToken();
 

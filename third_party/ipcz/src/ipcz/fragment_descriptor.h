@@ -1,4 +1,4 @@
-// Copyright 2022 The Chromium Authors. All rights reserved.
+// Copyright 2022 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -39,7 +39,6 @@ struct IPCZ_ALIGN(8) FragmentDescriptor {
   BufferId buffer_id() const { return buffer_id_; }
   uint32_t offset() const { return offset_; }
   uint32_t size() const { return size_; }
-  uint32_t end() const { return offset_ + size_; }
 
  private:
   // Identifies the shared memory buffer in which the memory resides. This ID is

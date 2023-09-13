@@ -1,4 +1,4 @@
-// Copyright 2022 The Chromium Authors. All rights reserved.
+// Copyright 2022 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -86,7 +86,7 @@ Fragment BlockAllocatorPool::Allocate() {
       FragmentDescriptor descriptor(
           entry->buffer_id, checked_cast<uint32_t>(offset),
           checked_cast<uint32_t>(allocator.block_size()));
-      return Fragment(descriptor, block);
+      return Fragment::FromDescriptorUnsafe(descriptor, block);
     }
 
     // Allocation from the active allocator failed. Try another if available.
