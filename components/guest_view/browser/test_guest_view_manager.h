@@ -121,6 +121,7 @@ class TestGuestViewManager : public GuestViewManager {
   size_t num_guests_created_;
   size_t expected_num_guests_created_;
   int num_views_garbage_collected_;
+  bool waiting_for_guests_created_;
 
   // Tracks the life time of the GuestView's main FrameTreeNode. The main FTN
   // has the same lifesspan as the GuestView.
@@ -128,7 +129,7 @@ class TestGuestViewManager : public GuestViewManager {
       guest_view_watchers_;
   std::unique_ptr<base::RunLoop> created_run_loop_;
   std::unique_ptr<base::RunLoop> num_created_run_loop_;
-  raw_ptr<GuestViewBase> waiting_for_attach_;
+  raw_ptr<GuestViewBase, DanglingUntriaged> waiting_for_attach_;
   std::unique_ptr<base::RunLoop> attached_run_loop_;
   std::unique_ptr<base::RunLoop> gc_run_loop_;
   base::OnceCallback<void(GuestViewBase*)> will_attach_callback_;
@@ -150,7 +151,7 @@ class TestGuestViewManagerFactory : public GuestViewManagerFactory {
       std::unique_ptr<GuestViewManagerDelegate> delegate) override;
 
  private:
-  raw_ptr<TestGuestViewManager> test_guest_view_manager_;
+  raw_ptr<TestGuestViewManager, DanglingUntriaged> test_guest_view_manager_;
 };
 
 }  // namespace guest_view

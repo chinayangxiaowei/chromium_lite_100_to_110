@@ -43,7 +43,6 @@
 #include "content/public/test/prerender_test_util.h"
 #include "content/public/test/test_frame_navigation_observer.h"
 #include "content/public/test/test_navigation_observer.h"
-#include "content/public/test/test_service.mojom.h"
 #include "content/public/test/test_utils.h"
 #include "content/public/test/url_loader_interceptor.h"
 #include "content/shell/browser/shell.h"
@@ -3341,6 +3340,49 @@ IN_PROC_BROWSER_TEST_F(NavigationRequestBrowserTest,
   SetBrowserClientForTesting(old_client);
 }
 
+// Check that a subframe can load an error page with an about:srcdoc URL, and
+// that the origin does not inherit the parent's origin (i.e., behaves like all
+// error pages) in this case.  In practice, this path may be taken by the heavy
+// ads intervention (for an example, see the
+// HeavyAdInterventionEnabled_ErrorPageLoaded test).
+IN_PROC_BROWSER_TEST_F(NavigationRequestBrowserTest,
+                       OriginForSrcdocErrorPageInSubframe) {
+  // Start on a page with a blank subframe.
+  GURL start_url =
+      embedded_test_server()->GetURL("a.test", "/page_with_blank_iframe.html");
+  EXPECT_TRUE(NavigateToURL(shell(), start_url));
+
+  // Do a srcdoc navigation in the subframe.
+  EXPECT_TRUE(
+      ExecJs(shell(), "document.querySelector('iframe').srcdoc='foo';"));
+  EXPECT_TRUE(WaitForLoadStop(shell()->web_contents()));
+  FrameTreeNode* root = static_cast<WebContentsImpl*>(shell()->web_contents())
+                            ->GetPrimaryFrameTree()
+                            .root();
+  RenderFrameHostImpl* subframe_rfh = root->child_at(0)->current_frame_host();
+  EXPECT_EQ(GURL("about:srcdoc"), subframe_rfh->GetLastCommittedURL());
+
+  // Navigate the subframe to a post-commit error page, reusing its current
+  // srcdoc URL.  A post-commit error page provides a way to reach an error
+  // page for a srcdoc subframe; note that it isn't possible to use
+  // NavigationThrottles to block srcdoc navigations, since throttles don't
+  // currently run in that case.
+  TestNavigationObserver navigation_observer(shell()->web_contents(), 1);
+  shell()->web_contents()->GetController().LoadPostCommitErrorPage(
+      subframe_rfh, subframe_rfh->GetLastCommittedURL(), "error_page_contents",
+      net::ERR_BLOCKED_BY_CLIENT);
+  navigation_observer.Wait();
+  EXPECT_FALSE(navigation_observer.last_navigation_succeeded());
+
+  // Verify that the origin of the srcdoc frame's parent wasn't inherited and
+  // also wasn't used for the precursor.  The error page's origin should be
+  // opaque without a valid precursor.
+  url::Origin origin =
+      root->child_at(0)->current_frame_host()->GetLastCommittedOrigin();
+  EXPECT_TRUE(origin.opaque());
+  EXPECT_FALSE(origin.GetTupleOrPrecursorTupleIfOpaque().IsValid());
+}
+
 // Verify that when navigation 1, which starts in an initial siteless
 // SiteInstance and results in an error page, races with navigation 2, which
 // requires a dedicated process and wants to reuse an existing process,
@@ -3634,7 +3676,7 @@ IN_PROC_BROWSER_TEST_F(NavigationRequestFencedFrameBrowserTest,
   EXPECT_EQ(view_source_url.spec(),
             EvalJs(fenced_frame_host,
                    JsReplace(R"({location.href = $1;})", view_source_url)));
-  console_observer.Wait();
+  ASSERT_TRUE(console_observer.Wait());
 
   // Original page shouldn't navigate away.
   EXPECT_EQ(fenced_frame_url, fenced_frame_host->GetLastCommittedURL());
@@ -3849,85 +3891,6 @@ IN_PROC_BROWSER_TEST_P(NavigationRequestMPArchBrowserTest,
       }
     }
   }
-}
-
-// Tests that when trying to commit an error page for a failed navigation, but
-// the renderer process of the, the navigation won't commit and won't crash.
-// Regression test for https://crbug.com/1444360.
-IN_PROC_BROWSER_TEST_F(NavigationRequestBrowserTest,
-                       RendererCrashedBeforeCommitErrorPage) {
-  // Navigate to `url_a` first.
-  GURL url_a(embedded_test_server()->GetURL("a.com", "/title1.html"));
-  ASSERT_TRUE(NavigateToURL(shell(), url_a));
-
-  // Set up an URLLoaderInterceptor which will cause future navigations to fail.
-  auto url_loader_interceptor = std::make_unique<URLLoaderInterceptor>(
-      base::BindRepeating([](URLLoaderInterceptor::RequestParams* params) {
-        network::URLLoaderCompletionStatus status;
-        status.error_code = net::ERR_NOT_IMPLEMENTED;
-        params->client->OnComplete(status);
-        return true;
-      }));
-
-  // Do a navigation to `url_b1` that will fail and commit an error page. This
-  // is important so that the next error page navigation won't need to create a
-  // speculative RenderFrameHost (unless RenderDocument is enabled) and won't
-  // get cancelled earlier than commit time due to speculative RFH deletion.
-  GURL url_b1(embedded_test_server()->GetURL("b.com", "/title1.html"));
-  EXPECT_FALSE(NavigateToURL(shell(), url_b1));
-  EXPECT_EQ(shell()->web_contents()->GetLastCommittedURL(), url_b1);
-  EXPECT_TRUE(
-      shell()->web_contents()->GetPrimaryMainFrame()->IsErrorDocument());
-
-  // For the next navigation, set up a throttle that will be used to wait for
-  // WillFailRequest() and then defer the navigation, so that we can crash the
-  // error page process first.
-  TestNavigationThrottleInstaller installer(
-      shell()->web_contents(),
-      NavigationThrottle::PROCEED /* will_start_result */,
-      NavigationThrottle::PROCEED /* will_redirect_result */,
-      NavigationThrottle::DEFER /* will_fail_result */,
-      NavigationThrottle::PROCEED /* will_process_result */);
-
-  // Start a navigation to `url_b2` that will also fail, but before it commits
-  // an error page, cause the error page process to crash.
-  GURL url_b2(embedded_test_server()->GetURL("b.com", "/title2.html"));
-  TestNavigationManager manager(shell()->web_contents(), url_b2);
-  shell()->LoadURL(url_b2);
-  EXPECT_TRUE(manager.WaitForRequestStart());
-
-  // Resume the navigation and wait for WillFailRequest(). After this point, we
-  // will have picked the final RenderFrameHost & RenderProcessHost for the
-  // failed navigation.
-  manager.ResumeNavigation();
-  installer.WaitForThrottleWillFail();
-
-  // Kill the error page process. This will cause for the navigation to `url_b2`
-  // to return early in `NavigationRequest::ReadyToCommitNavigation()` and not
-  // commit a new error page.
-  RenderProcessHost* process_to_kill =
-      manager.GetNavigationHandle()->GetRenderFrameHost()->GetProcess();
-  ASSERT_TRUE(process_to_kill->IsInitializedAndNotDead());
-  {
-    // Trigger a renderer kill by calling DoSomething() which will cause a bad
-    // message to be reported.
-    RenderProcessHostBadIpcMessageWaiter kill_waiter(process_to_kill);
-    mojo::Remote<mojom::TestService> service;
-    process_to_kill->BindReceiver(service.BindNewPipeAndPassReceiver());
-    service->DoSomething(base::DoNothing());
-    EXPECT_EQ(bad_message::RPH_MOJO_PROCESS_ERROR, kill_waiter.Wait());
-  }
-  ASSERT_FALSE(process_to_kill->IsInitializedAndNotDead());
-
-  // Resume the navigation, which won't commit.
-  if (!ShouldCreateNewHostForAllFrames()) {
-    installer.navigation_throttle()->ResumeNavigation();
-  }
-  manager.WaitForNavigationFinished();
-  EXPECT_FALSE(WaitForLoadStop(shell()->web_contents()));
-
-  // The tab stayed at `url_b1` as the `url_b2` navigation didn't commit.
-  EXPECT_EQ(shell()->web_contents()->GetLastCommittedURL(), url_b1);
 }
 
 }  // namespace content

@@ -13,7 +13,6 @@
 #include "base/system/sys_info.h"
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
-#include "media/base/bind_to_current_loop.h"
 #include "media/base/svc_scalability_mode.h"
 #include "media/base/timestamp_constants.h"
 #include "media/base/video_frame.h"
@@ -118,7 +117,6 @@ EncoderStatus SetUpAomConfig(const VideoEncoder::Options& opts,
   svc_params = {};
   svc_params.framerate_factor[0] = 1;
   svc_params.number_spatial_layers = 1;
-  svc_params.number_temporal_layers = 1;
   if (opts.scalability_mode.has_value()) {
     switch (opts.scalability_mode.value()) {
       case SVCScalabilityMode::kL1T2:
@@ -169,7 +167,7 @@ void Av1VideoEncoder::Initialize(VideoCodecProfile profile,
                                  const Options& options,
                                  OutputCB output_cb,
                                  EncoderStatusCB done_cb) {
-  done_cb = BindToCurrentLoop(std::move(done_cb));
+  done_cb = BindCallbackToCurrentLoopIfNeeded(std::move(done_cb));
   if (codec_) {
     std::move(done_cb).Run(EncoderStatus::Codes::kEncoderInitializeTwice);
     return;
@@ -267,7 +265,7 @@ void Av1VideoEncoder::Initialize(VideoCodecProfile profile,
 
   options_ = options;
   originally_configured_size_ = options.frame_size;
-  output_cb_ = BindToCurrentLoop(std::move(output_cb));
+  output_cb_ = BindCallbackToCurrentLoopIfNeeded(std::move(output_cb));
   codec_ = std::move(codec);
   std::move(done_cb).Run(EncoderStatus::Codes::kOk);
 }
@@ -275,7 +273,7 @@ void Av1VideoEncoder::Initialize(VideoCodecProfile profile,
 void Av1VideoEncoder::Encode(scoped_refptr<VideoFrame> frame,
                              bool key_frame,
                              EncoderStatusCB done_cb) {
-  done_cb = BindToCurrentLoop(std::move(done_cb));
+  done_cb = BindCallbackToCurrentLoopIfNeeded(std::move(done_cb));
   if (!codec_) {
     std::move(done_cb).Run(
         EncoderStatus::Codes::kEncoderInitializeNeverCompleted);
@@ -381,7 +379,7 @@ void Av1VideoEncoder::Encode(scoped_refptr<VideoFrame> frame,
   }
 
   auto temporal_id_status = AssignNextTemporalId(key_frame);
-  if (temporal_id_status.has_error()) {
+  if (!temporal_id_status.has_value()) {
     std::move(done_cb).Run(std::move(temporal_id_status).error());
     return;
   }
@@ -411,7 +409,7 @@ void Av1VideoEncoder::Encode(scoped_refptr<VideoFrame> frame,
 void Av1VideoEncoder::ChangeOptions(const Options& options,
                                     OutputCB output_cb,
                                     EncoderStatusCB done_cb) {
-  done_cb = BindToCurrentLoop(std::move(done_cb));
+  done_cb = BindCallbackToCurrentLoopIfNeeded(std::move(done_cb));
   if (!codec_) {
     std::move(done_cb).Run(
         EncoderStatus::Codes::kEncoderInitializeNeverCompleted);
@@ -459,7 +457,7 @@ void Av1VideoEncoder::ChangeOptions(const Options& options,
   svc_params_ = new_svc_params;
   options_ = options;
   if (!output_cb.is_null())
-    output_cb_ = BindToCurrentLoop(std::move(output_cb));
+    output_cb_ = BindCallbackToCurrentLoopIfNeeded(std::move(output_cb));
   std::move(done_cb).Run(EncoderStatus::Codes::kOk);
 }
 
@@ -555,7 +553,7 @@ EncoderStatus::Or<int> Av1VideoEncoder::AssignNextTemporalId(bool key_frame) {
 Av1VideoEncoder::~Av1VideoEncoder() = default;
 
 void Av1VideoEncoder::Flush(EncoderStatusCB done_cb) {
-  done_cb = BindToCurrentLoop(std::move(done_cb));
+  done_cb = BindCallbackToCurrentLoopIfNeeded(std::move(done_cb));
   if (!codec_) {
     std::move(done_cb).Run(
         EncoderStatus::Codes::kEncoderInitializeNeverCompleted);
